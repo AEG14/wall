@@ -51,6 +51,7 @@ interface Post {
   user_id: string | null;
   body: string;
   created_at: string;
+  image_url?: string | null;
 }
 
 export default function Home() {
@@ -61,7 +62,10 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(typeof window !== 'undefined' && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
   const [mounted, setMounted] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+
 
   // Theme effect
   useEffect(() => {
@@ -103,17 +107,67 @@ export default function Home() {
     return () => { mounted = false; supabase.removeChannel(channel); };
   }, []);
 
+  
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selected = e.target.files?.[0];
+    if (selected && selected.size > 5 * 1024 * 1024) {
+      setError("Image must be less than 5MB.");
+      setFile(null);
+      setImagePreview(null);
+    } else if (selected && !selected.type.startsWith("image/")) {
+      setError("Only image files are allowed.");
+      setFile(null);
+      setImagePreview(null);
+    } else {
+      setError(null);
+      setFile(selected || null);
+      if (selected) {
+        setImagePreview(URL.createObjectURL(selected));
+      } else {
+        setImagePreview(null);
+      }
+    }
+  };
+
   // Handle post submit
   const handleShare = async () => {
     if (!body.trim()) return;
     setPosting(true);
     setError(null);
-    const { error } = await supabase.from("posts").insert({ body });
+
+    let imageUrl: string | null = null;
+
+    // Upload image if present
+    if (file) {
+      const ext = file.name.split('.').pop();
+      const fileName = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}.${ext}`;
+      const { error: uploadError } = await supabase
+        .storage
+        .from('post-images')
+        .upload(fileName, file);
+
+      if (uploadError) {
+        setError("Failed to upload image: " + uploadError.message);
+        setPosting(false);
+        return;
+      }
+
+      const { data } = supabase
+        .storage
+        .from('post-images')
+        .getPublicUrl(fileName);
+
+      imageUrl = data.publicUrl;
+    }
+
+    const { error: insertError } = await supabase.from("posts").insert({ body, image_url: imageUrl });
     setPosting(false);
-    if (error) {
+    if (insertError) {
       setError("Failed to post. Please try again.");
     } else {
       setBody("");
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = "";
       if (inputRef.current) inputRef.current.focus();
     }
   };
@@ -142,7 +196,7 @@ export default function Home() {
         {/* Sidebar */}
         <aside className="w-full sm:w-80 bg-white/90 dark:bg-gray-900 border-r border-gray-200 dark:border-gray-800 p-6 flex flex-col items-center gap-4 shadow-md">
           <Image
-            src="/file.svg"
+            src="/aithan-photo.jpg"
             alt="Profile placeholder"
             width={120}
             height={120}
@@ -167,7 +221,7 @@ export default function Home() {
         {/* Main Feed */}
         <main className="flex-1 flex flex-col items-center p-4 sm:p-10 gap-6">
           <div className="w-full max-w-xl bg-white/95 dark:bg-gray-800 rounded-2xl shadow-xl p-6 mb-4 border border-gray-100 dark:border-gray-700">
-            <textarea
+          <textarea
               ref={inputRef}
               className="w-full border border-gray-300 dark:border-gray-700 rounded-lg p-2 resize-none focus:outline-none focus:ring-2 focus:ring-[#4d6ca8] bg-gray-50 dark:bg-gray-900 dark:text-white"
               rows={3}
@@ -177,14 +231,48 @@ export default function Home() {
               onChange={e => setBody(e.target.value)}
               disabled={posting}
             />
-            <div className="flex justify-between items-center mt-2">
-              <span className="text-xs text-gray-500 dark:text-gray-400">{280 - body.length} characters remaining</span>
-              <Button onClick={handleShare} disabled={!body.trim() || posting} loading={posting}>Share</Button>
-            </div>
+            <div className="flex flex-col sm:flex-row justify-between items-center mt-2 gap-2">
+        <span className="text-xs text-gray-500 dark:text-gray-400">{280 - body.length} characters remaining</span>
+        {/* Custom file upload UI */}
+        <label
+          htmlFor="image-upload"
+          className="flex flex-col items-center justify-center border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-2 cursor-pointer hover:border-blue-400 transition-colors min-w-[120px] min-h-[48px] bg-gray-50 dark:bg-gray-900"
+        >
+          {imagePreview ? (
+            <img
+              src={imagePreview}
+              alt="Preview"
+              className="h-12 w-12 object-cover rounded-md"
+            />
+          ) : (
+            <span className="flex flex-col items-center text-xs text-gray-500 dark:text-gray-400">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 16V8a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12l2 2 4-4" />
+              </svg>
+              Add Image
+            </span>
+          )}
+          <input
+            id="image-upload"
+            type="file"
+            accept="image/*"
+            onChange={handleFileChange}
+            disabled={posting}
+            className="hidden"
+          />
+        </label>
+        <Button onClick={handleShare} disabled={(!body.trim() && !file) || posting} loading={posting}>Share</Button>
+      </div>
+            {file && (
+              <div className="mt-2 text-xs text-green-600 dark:text-green-400">
+                Selected: {file.name} ({(file.size / 1024 / 1024).toFixed(2)} MB)
+              </div>
+            )}
             {error && <div className="mt-2 text-sm text-red-500 dark:text-red-400">{error}</div>}
           </div>
           <div className="w-full max-w-xl">
-            {loading ? (
+          {loading ? (
               <div className="flex flex-col gap-4">
                 {[...Array(3)].map((_, i) => <PostSkeleton key={i} />)}
               </div>
@@ -199,6 +287,16 @@ export default function Home() {
                       <span className="text-xs text-gray-400 dark:text-gray-300">· {getRelativeTime(post.created_at)}</span>
                     </div>
                     <div className="text-gray-700 dark:text-gray-100 mb-2 whitespace-pre-line">{post.body}</div>
+                    {post.image_url && (
+                      <div className="my-2">
+                        <img
+                          src={post.image_url}
+                          alt="Post image"
+                          className="rounded-lg max-h-80 object-contain border border-gray-200 dark:border-gray-700 mx-auto"
+                          style={{ maxWidth: "100%" }}
+                        />
+                      </div>
+                    )}
                     <div className="text-xs text-gray-400 dark:text-gray-300 text-right">{new Date(post.created_at).toLocaleString()}</div>
                   </li>
                 ))}
